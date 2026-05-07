@@ -16,8 +16,23 @@ export default function Home() {
     if (action === 'login') {
       const invitation = searchParams.get('invitation');
       const organization = searchParams.get('organization');
+
+      if (invitation) {
+        const params = new URLSearchParams({
+          client_id: AUTH0_CLIENT_ID,
+          response_type: 'code',
+          scope: 'openid profile email read:me:connected_accounts create:me:connected_accounts delete:me:connected_accounts',
+          redirect_uri: 'https://localhost:3000/callback',
+          audience: `https://${AUTH0_DOMAIN}/me/`,
+          response_mode: 'query',
+          invitation,
+          organization,
+        });
+        window.location.href = `https://${AUTH0_DOMAIN}/authorize?${params}`;
+        return;
+      }
+
       const qs = new URLSearchParams();
-      if (invitation) qs.set('invitation', invitation);
       if (organization) qs.set('organization', organization);
       const suffix = qs.toString() ? `?${qs}` : '';
       getLoginUrl(suffix).then((url) => { window.location.href = url; });
