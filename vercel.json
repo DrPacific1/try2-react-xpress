@@ -4,8 +4,8 @@
   "installCommand": "cd frontend && npm install",
   "framework": "vite",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://YOUR_RENDER_URL.onrender.com/api/:path*" },
-    { "source": "/callback", "destination": "https://YOUR_RENDER_URL.onrender.com/callback" },
+    { "source": "/api/:path*", "destination": "https://b2b-dreams-backend.onrender.com/api/:path*" },
+    { "source": "/callback", "destination": "https://b2b-dreams-backend.onrender.com/callback" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
