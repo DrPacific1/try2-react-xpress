@@ -137,3 +137,43 @@ export async function getAvailableRoles() {
   const res = await fetch(`${API_BASE}/api/org/roles`, { credentials: 'include' });
   return res.json();
 }
+
+export async function getMyOrganizations() {
+  const res = await fetch(`${API_BASE}/api/org/list`, { credentials: 'include' });
+  return res.json();
+}
+
+export async function resolveOrg(email) {
+  const res = await fetch(`${API_BASE}/api/auth/resolve-org`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ email }),
+  });
+  return res.json();
+}
+
+// SSO Self-Service APIs
+
+export async function getOrgSSOConnections() {
+  const res = await fetch(`${API_BASE}/api/org/sso/connections`, { credentials: 'include' });
+  return res.json();
+}
+
+export async function createSSOTicket(connectionId) {
+  const res = await fetch(`${API_BASE}/api/org/sso/ticket`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ connection_id: connectionId || undefined }),
+  });
+  return res.json();
+}
+
+export async function removeOrgSSOConnection(connectionId) {
+  const res = await fetch(`${API_BASE}/api/org/sso/connections/${encodeURIComponent(connectionId)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+  return res.json();
+}
