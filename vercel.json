@@ -3,5 +3,9 @@
   "outputDirectory": "frontend/dist",
   "installCommand": "cd frontend && npm install",
   "framework": "vite",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://YOUR_RENDER_URL.onrender.com/api/:path*" },
+    { "source": "/callback", "destination": "https://YOUR_RENDER_URL.onrender.com/callback" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }

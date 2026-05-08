@@ -4,6 +4,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const axios = require('axios');
+const jwt = require('jsonwebtoken');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -11,10 +12,14 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 // Middleware
 app.use(cors({
   origin: process.env.FRONTEND_URL,
-  credentials: true, // Allow cookies
+  credentials: true,
 }));
 
 app.use(express.json());
@@ -26,8 +31,8 @@ app.use(session({
   cookie: {
     secure: true,
     httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    maxAge: 24 * 60 * 60 * 1000,
   },
 }));
 
@@ -49,9 +54,11 @@ app.get('/api/auth/login-url', (req, res) => {
     redirect_uri: process.env.AUTH0_CALLBACK_URL,
     audience: process.env.AUTH0_AUDIENCE,
     response_mode: 'query',
+    prompt: 'login',
   });
   if (req.query.invitation) params.set('invitation', req.query.invitation);
   if (req.query.organization) params.set('organization', req.query.organization);
+  if (req.query.login_hint) params.set('login_hint', req.query.login_hint);
 
   const authorizeUrl = `https://${process.env.AUTH0_DOMAIN}/authorize?${params}`;
   res.json({ loginUrl: authorizeUrl });
@@ -111,13 +118,19 @@ app.get('/callback', async (req, res) => {
 
     const user = userResponse.data;
 
-    // Store in session
+    const decoded = jwt.decode(id_token);
+    console.log('Callback org_id from token:', decoded?.org_id);
+
     req.session.user = user;
     req.session.accessToken = access_token;
     req.session.idToken = id_token;
+    if (decoded && decoded.org_id) {
+      req.session.orgId = decoded.org_id;
+    }
+    console.log('Session orgId after callback:', req.session.orgId);
 
     // Redirect back to frontend
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
+    res.redirect(`${process.env.FRONTEND_URL}/`);
   } catch (error) {
     console.error('Error exchanging code:', error.response?.data || error.message);
     res.redirect(`${process.env.FRONTEND_URL}?error=token_exchange_failed`);
@@ -128,7 +141,7 @@ app.get('/callback', async (req, res) => {
 app.get('/api/auth/me', (req, res) => {
   if (req.session.user) {
     res.json({
-      user: req.session.user,
+      user: { ...req.session.user, org_id: req.session.orgId || null },
       isAuthenticated: true,
     });
   } else {
@@ -262,14 +275,16 @@ app.get('/api/auth/connected-accounts', async (req, res) => {
 
 // 11. Get link account URL (secondary login for Google)
 app.get('/api/auth/link-account', (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
   const state = Buffer.from(JSON.stringify({ action: 'link' })).toString('base64');
   const params = new URLSearchParams({
     client_id: process.env.AUTH0_CLIENT_ID,
     response_type: 'code',
     scope: 'openid profile email',
-    redirect_uri: `http://localhost:${PORT}/link-callback`,
+    redirect_uri: `https://localhost:${PORT}/link-callback`,
     connection: 'google-oauth2',
-    prompt: 'login',
     state: state,
   });
   const linkUrl = `https://${process.env.AUTH0_DOMAIN}/authorize?${params}`;
@@ -297,7 +312,7 @@ app.get('/link-callback', async (req, res) => {
         client_secret: process.env.AUTH0_CLIENT_SECRET,
         code: code,
         grant_type: 'authorization_code',
-        redirect_uri: `http://localhost:${PORT}/link-callback`,
+        redirect_uri: `https://localhost:${PORT}/link-callback`,
       }
     );
 
@@ -383,6 +398,67 @@ async function getManagementToken() {
   return res.data.access_token;
 }
 
+// Resolve organization(s) from email — uses actual org memberships
+app.post('/api/auth/resolve-org', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  const domain = email.split('@')[1];
+  if (!domain) return res.status(400).json({ error: 'Invalid email' });
+
+  try {
+    const token = await getManagementToken();
+    let primaryEmail = email;
+    let matchedOrgs = [];
+
+    let users = [];
+    const primaryRes = await axios.get(
+      `https://${process.env.AUTH0_DOMAIN}/api/v2/users-by-email`,
+      { headers: { Authorization: `Bearer ${token}` }, params: { email } }
+    );
+    users = primaryRes.data || [];
+
+    if (users.length === 0) {
+      const searchRes = await axios.get(
+        `https://${process.env.AUTH0_DOMAIN}/api/v2/users`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          params: { q: `identities.profileData.email:"${email}"`, search_engine: 'v3' }
+        }
+      );
+      users = searchRes.data || [];
+    }
+
+    if (users.length > 0) {
+      const user = users[0];
+      primaryEmail = user.email || email;
+
+      const orgsRes = await axios.get(
+        `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(user.user_id)}/organizations`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const userOrgs = Array.isArray(orgsRes.data) ? orgsRes.data : (orgsRes.data.organizations || []);
+      matchedOrgs = userOrgs.map(o => ({ org_id: o.id, org_name: o.display_name }));
+    } else {
+      const orgsResponse = await axios.get(
+        `https://${process.env.AUTH0_DOMAIN}/api/v2/organizations`,
+        { headers: { Authorization: `Bearer ${token}` }, params: { per_page: 100 } }
+      );
+      const allOrgs = Array.isArray(orgsResponse.data) ? orgsResponse.data : (orgsResponse.data.organizations || []);
+      for (const org of allOrgs) {
+        if (org.metadata?.domain === domain) {
+          matchedOrgs.push({ org_id: org.id, org_name: org.display_name });
+        }
+      }
+    }
+
+    res.json({ orgs: matchedOrgs, login_hint: primaryEmail });
+  } catch (error) {
+    console.error('Resolve org error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to resolve organization' });
+  }
+});
+
 // 14. Create organization
 app.post('/api/org/create', async (req, res) => {
   if (!req.session.user) {
@@ -440,6 +516,28 @@ app.post('/api/org/create', async (req, res) => {
   }
 });
 
+// 14b. List all organizations the user belongs to
+app.get('/api/org/list', async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+
+  try {
+    const token = await getManagementToken();
+    const userId = req.session.user.sub;
+
+    const response = await axios.get(
+      `https://${process.env.AUTH0_DOMAIN}/api/v2/users/${encodeURIComponent(userId)}/organizations`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    res.json(response.data || []);
+  } catch (error) {
+    console.error('List orgs error:', error.response?.status, error.response?.data || error.message);
+    res.json([]);
+  }
+});
+
 // 15. Get current user's organization
 app.get('/api/org/me', async (req, res) => {
   if (!req.session.user) {
@@ -456,11 +554,17 @@ app.get('/api/org/me', async (req, res) => {
     );
 
     const orgs = orgsResponse.data;
+    console.log('GET /api/org/me - session.orgId:', req.session.orgId, 'orgs:', orgs.map(o => o.id));
     if (orgs.length === 0) {
       return res.json(null);
     }
 
-    const org = orgs[0];
+    let org = orgs[0];
+    if (req.session.orgId) {
+      const match = orgs.find(o => o.id === req.session.orgId);
+      if (match) org = match;
+    }
+    console.log('GET /api/org/me - returning org:', org.id, org.name);
     req.session.orgId = org.id;
 
     let roles = [];
@@ -732,15 +836,127 @@ app.get('/api/org/roles', async (req, res) => {
 });
 
 // ============================================
+// SSO SELF-SERVICE ENDPOINTS
+// ============================================
+
+const ENTERPRISE_STRATEGIES = ['samlp', 'oidc', 'okta', 'waad', 'google-apps', 'adfs', 'pingfederate'];
+
+// 23. Get enterprise SSO connections for current org
+app.get('/api/org/sso/connections', async (req, res) => {
+  if (!req.session.user || !req.session.orgId) {
+    return res.status(401).json({ error: 'Not authenticated or no organization' });
+  }
+
+  try {
+    const token = await getManagementToken();
+    const orgId = req.session.orgId;
+
+    const response = await axios.get(
+      `https://${process.env.AUTH0_DOMAIN}/api/v2/organizations/${orgId}/enabled_connections`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    const connections = response.data || [];
+    const enterpriseConnections = connections.filter(
+      c => ENTERPRISE_STRATEGIES.includes(c.connection?.strategy)
+    );
+
+    res.json(enterpriseConnections);
+  } catch (error) {
+    console.error('Get SSO connections error:', error.response?.status, error.response?.data || error.message);
+    res.json([]);
+  }
+});
+
+// 24. Generate self-service SSO ticket
+app.post('/api/org/sso/ticket', async (req, res) => {
+  if (!req.session.user || !req.session.orgId) {
+    return res.status(401).json({ error: 'Not authenticated or no organization' });
+  }
+
+  const orgId = req.session.orgId;
+  const profileMap = {
+    'org_15tS6qZ4OSVbjSle': process.env.AUTH0_SS_PROFILE_ID_XERO,
+    'org_O71kNAAGxeWbbqSg': process.env.AUTH0_SS_PROFILE_ID_MYOB,
+  };
+  const profileId = profileMap[orgId] || process.env.AUTH0_SS_PROFILE_ID_XERO;
+  if (!profileId) {
+    return res.status(500).json({ error: 'Self-service profile not configured for this organization' });
+  }
+
+  try {
+    const token = await getManagementToken();
+    const { connection_id } = req.body;
+
+    const ticketBody = {
+      enabled_organizations: [{
+        organization_id: orgId,
+        assign_membership_on_login: true,
+      }],
+      enabled_clients: [process.env.AUTH0_CLIENT_ID],
+    };
+
+    if (connection_id) {
+      ticketBody.connection_id = connection_id;
+    } else {
+      ticketBody.connection_config = {
+        name: `${orgId.replace('org_', '')}-sso`,
+      };
+    }
+
+    const response = await axios.post(
+      `https://${process.env.AUTH0_DOMAIN}/api/v2/self-service-profiles/${profileId}/sso-ticket`,
+      ticketBody,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    res.json({ ticket: response.data.ticket });
+  } catch (error) {
+    console.error('Create SSO ticket error:', error.response?.status, error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data?.message || 'Failed to generate SSO setup link' });
+  }
+});
+
+// 25. Remove enterprise connection from org
+app.delete('/api/org/sso/connections/:connectionId', async (req, res) => {
+  if (!req.session.user || !req.session.orgId) {
+    return res.status(401).json({ error: 'Not authenticated or no organization' });
+  }
+
+  try {
+    const token = await getManagementToken();
+    const orgId = req.session.orgId;
+
+    await axios.delete(
+      `https://${process.env.AUTH0_DOMAIN}/api/v2/organizations/${orgId}/enabled_connections/${req.params.connectionId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    console.log('SSO connection removed:', req.params.connectionId);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Remove SSO connection error:', error.response?.status, error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to remove SSO connection' });
+  }
+});
+
+// ============================================
 // START SERVER
 // ============================================
 
-const sslOptions = {
-  key: fs.readFileSync(path.join(__dirname, 'certs', 'key.pem')),
-  cert: fs.readFileSync(path.join(__dirname, 'certs', 'cert.pem')),
-};
+if (process.env.NODE_ENV === 'production') {
+  app.listen(PORT, () => {
+    console.log(`✅ Backend running on port ${PORT} (production)`);
+    console.log(`Auth0 Domain: ${process.env.AUTH0_DOMAIN}`);
+  });
+} else {
+  const sslOptions = {
+    key: fs.readFileSync(path.join(__dirname, 'certs', 'key.pem')),
+    cert: fs.readFileSync(path.join(__dirname, 'certs', 'cert.pem')),
+  };
 
-https.createServer(sslOptions, app).listen(PORT, () => {
-  console.log(`✅ Backend running on https://localhost:${PORT}`);
-  console.log(`Auth0 Domain: ${process.env.AUTH0_DOMAIN}`);
-});
+  https.createServer(sslOptions, app).listen(PORT, () => {
+    console.log(`✅ Backend running on https://localhost:${PORT}`);
+    console.log(`Auth0 Domain: ${process.env.AUTH0_DOMAIN}`);
+  });
+}

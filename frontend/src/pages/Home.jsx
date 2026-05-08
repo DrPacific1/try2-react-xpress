@@ -45,19 +45,15 @@ export default function Home() {
 
     getMe().then((data) => {
       if (data.isAuthenticated) {
-        navigate('/dashboard');
+        const returnTo = sessionStorage.getItem('returnTo');
+        sessionStorage.removeItem('returnTo');
+        navigate(returnTo || '/dashboard');
       }
     });
   }, [navigate, searchParams]);
 
   const handleLogin = () => {
-    const logoutUrl = `https://${AUTH0_DOMAIN}/v2/logout?client_id=${AUTH0_CLIENT_ID}&returnTo=${encodeURIComponent('https://localhost:3000?action=login')}`;
-    window.location.href = logoutUrl;
-  };
-
-  const handleSignup = () => {
-    const logoutUrl = `https://${AUTH0_DOMAIN}/v2/logout?client_id=${AUTH0_CLIENT_ID}&returnTo=${encodeURIComponent('https://localhost:3000?action=signup')}`;
-    window.location.href = logoutUrl;
+    navigate('/login');
   };
 
   return (
@@ -65,49 +61,58 @@ export default function Home() {
       <nav className="navbar">
         <div className="navbar-brand">B2B Dreams</div>
         <div className="navbar-actions">
-          <button className="btn-signup-nav" onClick={() => navigate('/register-business')}>Sign-up Your Business</button>
+          <button className="btn-signup-nav" onClick={() => { sessionStorage.setItem('returnTo', '/register-business'); navigate('/login'); }}>Sign-up Your Business</button>
           <button className="btn-login-nav" onClick={handleLogin}>Log In</button>
-          <button className="btn-signup-nav" onClick={handleSignup}>Sign Up</button>
         </div>
       </nav>
 
       <section className="hero">
         <div className="hero-content">
-          <h1 className="hero-headline">Authentication made simple</h1>
-          <p className="hero-subtitle">
-            Secure, reliable identity infrastructure for your applications.
-            Get started in minutes with enterprise-grade authentication.
-          </p>
-          <div className="hero-actions">
-            <button className="btn-primary" onClick={handleSignup}>Get Started for Free</button>
-            <button className="btn-secondary" onClick={handleLogin}>Log In</button>
+          <div className="hero-text">
+            <h1 className="hero-headline">Authentication made simple</h1>
+            <p className="hero-subtitle">
+              Secure, reliable identity infrastructure for your applications.
+              Get started in minutes with enterprise-grade authentication.
+            </p>
+            <div className="hero-actions">
+              <button className="btn-primary" onClick={() => { sessionStorage.setItem('returnTo', '/register-business'); navigate('/login'); }}>Sign-up Your Business</button>
+              <button className="btn-secondary" onClick={handleLogin}>Log In</button>
+            </div>
+            <div className="features-bar">
+              <div className="feature-item">
+                <span className="feature-icon">
+                  <svg fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth="3">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </span>
+                Universal Login
+              </div>
+              <div className="feature-item">
+                <span className="feature-icon">
+                  <svg fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth="3">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </span>
+                Single Sign-On
+              </div>
+              <div className="feature-item">
+                <span className="feature-icon">
+                  <svg fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth="3">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </span>
+                Multi-Factor Auth
+              </div>
+            </div>
           </div>
-
-          <div className="features-bar">
-            <div className="feature-item">
-              <span className="feature-icon">
-                <svg fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth="3">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </span>
-              Universal Login
-            </div>
-            <div className="feature-item">
-              <span className="feature-icon">
-                <svg fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth="3">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </span>
-              Single Sign-On
-            </div>
-            <div className="feature-item">
-              <span className="feature-icon">
-                <svg fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth="3">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-              </span>
-              Multi-Factor Auth
-            </div>
+          <div className="hero-video">
+            <iframe
+              src="https://www.youtube.com/embed/M9z8MeQicz4?mute=1&rel=0"
+              title="Auth0 Explainer Video"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              frameBorder="0"
+            ></iframe>
           </div>
         </div>
       </section>
